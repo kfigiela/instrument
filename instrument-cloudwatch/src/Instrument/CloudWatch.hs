@@ -37,7 +37,8 @@ import Data.Time.Clock.POSIX
 import Instrument
 import Network.AWS
 import qualified Network.AWS.CloudWatch as CW
-import qualified Network.AWS.CloudWatch.Lens as CW
+import qualified Network.AWS.CloudWatch.Types as CW
+import qualified Network.AWS.CloudWatch.PutMetricData as CW
 
 -------------------------------------------------------------------------------
 
