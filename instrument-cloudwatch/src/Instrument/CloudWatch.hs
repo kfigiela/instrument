@@ -32,13 +32,13 @@ import qualified Data.Map as M
 import Data.Monoid as Monoid
 import Data.Semigroup (sconcat)
 import qualified Data.Text as T
+import Data.Text (Text)
 import Data.Time.Clock
 import Data.Time.Clock.POSIX
 import Instrument
 import Network.AWS
-import qualified Network.AWS.CloudWatch as CW
-import qualified Network.AWS.CloudWatch.Types as CW
-import qualified Network.AWS.CloudWatch.PutMetricData as CW
+import Network.AWS.CloudWatch.PutMetricData
+import Network.AWS.CloudWatch.Types
 
 -------------------------------------------------------------------------------
 
@@ -127,8 +127,8 @@ startWorker CloudWatchICfg {..} q = go
         Just rawAggs -> do
           let datums = sconcat (toDatum A.<$> rawAggs)
           FT.forM_ (splitNE maxDatums datums) $ \datumPage -> do
-            let pmd = CW.newPutMetricData cwiNamespace & CW.putMetricData_metricData .~ FT.toList datumPage
-            res <- EX.tryAny (runResourceT (awsRetry (send cwiEnv pmd)))
+            let pmd = putMetricData cwiNamespace & pmdMetricData .~ FT.toList datumPage
+            res <- EX.tryAny (runResourceT (awsRetry (runAWS cwiEnv (send pmd))))
             case res of
               Left e -> do
                 void (EX.tryAny (cwiOnError e))
@@ -157,7 +157,7 @@ splitNE n xs
 -- will result in 1 datum. If the payload is an 'AggStats' and
 -- contains quantiles, those will be emitted as individual metrics
 -- with the quantile appended, e.g. metricName.p90
-toDatum :: Aggregated -> NonEmpty CW.MetricDatum
+toDatum :: Aggregated -> NonEmpty MetricDatum
 toDatum a =
   baseDatum :| quantileDatums
   where
@@ -166,16 +166,15 @@ toDatum a =
         AggStats stats -> Right (toSS stats)
         AggCount n -> Left (fromIntegral n)
     mkDatum name dValOrStats =
-      let base =
-            CW.newMetricDatum (T.pack name)
-              & CW.metricDatum_timestamp ?~ ts
-              & CW.metricDatum_dimensions ?~ dims
+      let base = metricDatum (T.pack name)
+             & mdTimestamp .~ Just ts
+             & mdDimensions .~ dims
        in -- Value and stats are mutually exclusive
           case dValOrStats of
-            Left dVal -> base & CW.metricDatum_value ?~ dVal
-            Right dStats -> base & CW.metricDatum_statisticValues ?~ dStats
+            Left dVal    -> base & mdValue ?~ dVal
+            Right dStats -> base & mdStatisticValues ?~ dStats
     quantileDatums = uncurry mkQuantileDatum <$> quantiles
-    mkQuantileDatum :: Int -> Double -> CW.MetricDatum
+    mkQuantileDatum :: Int -> Double -> MetricDatum
     mkQuantileDatum quantile val =
       mkDatum (baseMetricName Monoid.<> ".p" <> show quantile) (Left val)
     quantiles = case aggPayload a of
@@ -184,7 +183,7 @@ toDatum a =
     baseMetricName = (metricName (aggName a))
     ts = aggTS a ^. timeDouble
     dims = uncurry mkDim <$> take maxDimensions (M.toList (aggDimensions a))
-    mkDim (DimensionName dn) (DimensionValue dv) = CW.newDimension dn dv
+    mkDim (DimensionName dn) (DimensionValue dv) = dimension dn dv
     maxDimensions = 10
 
 -------------------------------------------------------------------------------
@@ -197,8 +196,8 @@ timeDouble = iso toT fromT
     fromT = realToFrac . utcTimeToPOSIXSeconds
 
 -------------------------------------------------------------------------------
-toSS :: Stats -> CW.StatisticSet
-toSS Stats {..} = CW.newStatisticSet (fromIntegral scount) ssum smin smax
+toSS :: Stats -> StatisticSet
+toSS Stats {..} = statisticSet (fromIntegral scount) ssum smin smax
 
 -------------------------------------------------------------------------------
 
