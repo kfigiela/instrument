@@ -71,8 +71,8 @@ initWorkerCSV ::
   FilePath ->
   -- | Aggregation period / flush interval in seconds
   Int ->
-  AggProcessConfig ->
   ExpandDimensionsPolicy ->
+  AggProcessConfig ->
   IO ()
 initWorkerCSV conn fp n exp cfg =
   initWorker "CSV Worker" conn n exp =<< initWorkerCSV' fp cfg
