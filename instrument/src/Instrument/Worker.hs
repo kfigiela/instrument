@@ -74,8 +74,8 @@ initWorkerCSV ::
   ExpandDimensionsPolicy ->
   AggProcessConfig ->
   IO ()
-initWorkerCSV conn fp n exp cfg =
-  initWorker "CSV Worker" conn n exp =<< initWorkerCSV' fp cfg
+initWorkerCSV conn fp n expPolicy cfg =
+  initWorker "CSV Worker" conn n expPolicy =<< initWorkerCSV' fp cfg
 
 -------------------------------------------------------------------------------
 
@@ -156,9 +156,9 @@ initWorkerGraphite' server port cfg = do
 -- | Generic utility for making worker backends. Will retry
 -- indefinitely with exponential backoff.
 initWorker :: String -> ConnectInfo -> Int -> ExpandDimensionsPolicy -> AggProcess -> IO ()
-initWorker wname conn n exp f = do
+initWorker wname conn n expPolicy f = do
   p <- createInstrumentPool conn
-  indefinitely' $ work p n exp f
+  indefinitely' $ work p n expPolicy f
   where
     indefinitely' = indefinitely wname (seconds n)
 
@@ -187,12 +187,12 @@ mkStats qs s =
 
 -- | Go over all pending stats buffers in redis.
 work :: R.Connection -> Int -> ExpandDimensionsPolicy -> AggProcess -> IO ()
-work r n exp f = runRedis r $ do
+work r n expPolicy f = runRedis r $ do
   dbg "entered work block"
   estimate <- fromRight 0 <$> scard packetsKey
   runConduit $
     CL.unfoldM nextKey estimate
-      .| CL.mapM_ (processSampler n exp f)
+      .| CL.mapM_ (processSampler n expPolicy f)
   where
     nextKey estRemaining
       | estRemaining > 0 = do
@@ -213,7 +213,7 @@ processSampler ::
   -- | Redis buffer for this metric
   B.ByteString ->
   Redis ()
-processSampler n exp (AggProcess cfg f) k = do
+processSampler n expPolicy (AggProcess cfg f) k = do
   packets <- popLAll k
   case packets of
     [] -> return ()
@@ -242,7 +242,7 @@ processSampler n exp (AggProcess cfg f) k = do
       mapM_ f aggs
   where
     quantilesFn = metricQuantiles cfg
-    expandDims' = case exp of
+    expandDims' = case expPolicy of
       ExpandDimensions -> expandDims
       DoNotExpandDimensions -> id
 
