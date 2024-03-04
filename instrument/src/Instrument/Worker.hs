@@ -111,8 +111,8 @@ initWorkerGraphite ::
   AggProcessConfig ->
   ExpandDimensionsPolicy ->
   IO ()
-initWorkerGraphite conn n server port cfg exp =
-  initWorker "Graphite Worker" conn n exp =<< initWorkerGraphite' server port cfg
+initWorkerGraphite conn n server port cfg expPolicy =
+  initWorker "Graphite Worker" conn n expPolicy =<< initWorkerGraphite' server port cfg
 
 -------------------------------------------------------------------------------
 
