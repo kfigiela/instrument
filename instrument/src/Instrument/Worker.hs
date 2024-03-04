@@ -72,9 +72,10 @@ initWorkerCSV ::
   -- | Aggregation period / flush interval in seconds
   Int ->
   AggProcessConfig ->
+  ExpandDimensionsPolicy ->
   IO ()
-initWorkerCSV conn fp n cfg =
-  initWorker "CSV Worker" conn n =<< initWorkerCSV' fp cfg
+initWorkerCSV conn fp n exp cfg =
+  initWorker "CSV Worker" conn n exp =<< initWorkerCSV' fp cfg
 
 -------------------------------------------------------------------------------
 
@@ -108,9 +109,10 @@ initWorkerGraphite ::
   -- | Graphite port
   Int ->
   AggProcessConfig ->
+  ExpandDimensionsPolicy ->
   IO ()
-initWorkerGraphite conn n server port cfg =
-  initWorker "Graphite Worker" conn n =<< initWorkerGraphite' server port cfg
+initWorkerGraphite conn n server port cfg exp =
+  initWorker "Graphite Worker" conn n exp =<< initWorkerGraphite' server port cfg
 
 -------------------------------------------------------------------------------
 
@@ -153,10 +155,10 @@ initWorkerGraphite' server port cfg = do
 
 -- | Generic utility for making worker backends. Will retry
 -- indefinitely with exponential backoff.
-initWorker :: String -> ConnectInfo -> Int -> AggProcess -> ExpandDimensionsPolicy -> IO ()
-initWorker wname conn n f exp = do
+initWorker :: String -> ConnectInfo -> Int -> ExpandDimensionsPolicy -> AggProcess -> IO ()
+initWorker wname conn n exp f = do
   p <- createInstrumentPool conn
-  indefinitely' $ work p n f exp
+  indefinitely' $ work p n exp f
   where
     indefinitely' = indefinitely wname (seconds n)
 
@@ -184,13 +186,13 @@ mkStats qs s =
 -------------------------------------------------------------------------------
 
 -- | Go over all pending stats buffers in redis.
-work :: R.Connection -> Int -> AggProcess -> ExpandDimensionsPolicy -> IO ()
-work r n f exp = runRedis r $ do
+work :: R.Connection -> Int -> ExpandDimensionsPolicy -> AggProcess -> IO ()
+work r n exp f = runRedis r $ do
   dbg "entered work block"
   estimate <- fromRight 0 <$> scard packetsKey
   runConduit $
     CL.unfoldM nextKey estimate
-      .| CL.mapM_ (processSampler n f exp)
+      .| CL.mapM_ (processSampler n exp f)
   where
     nextKey estRemaining
       | estRemaining > 0 = do
@@ -204,13 +206,14 @@ work r n f exp = runRedis r $ do
 processSampler ::
   -- | Flush interval - determines resolution
   Int ->
+  -- | Whether to do combinatorial dimension expansion
+  ExpandDimensionsPolicy ->
   -- | What to do with aggregation results
   AggProcess ->
   -- | Redis buffer for this metric
-  ExpandDimensionsPolicy ->
   B.ByteString ->
   Redis ()
-processSampler n (AggProcess cfg f) exp k = do
+processSampler n exp (AggProcess cfg f) k = do
   packets <- popLAll k
   case packets of
     [] -> return ()
