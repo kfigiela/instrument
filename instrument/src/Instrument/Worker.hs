@@ -20,6 +20,7 @@ module Instrument.Worker
     quantileMap,
     defAggProcessConfig,
 
+    ExpandDimensionsPolicy (..),
     -- * Exported for testing
     expandDims,
   )
@@ -152,10 +153,10 @@ initWorkerGraphite' server port cfg = do
 
 -- | Generic utility for making worker backends. Will retry
 -- indefinitely with exponential backoff.
-initWorker :: String -> ConnectInfo -> Int -> AggProcess -> IO ()
-initWorker wname conn n f = do
+initWorker :: String -> ConnectInfo -> Int -> AggProcess -> ExpandDimensionsPolicy -> IO ()
+initWorker wname conn n f exp = do
   p <- createInstrumentPool conn
-  indefinitely' $ work p n f
+  indefinitely' $ work p n f exp
   where
     indefinitely' = indefinitely wname (seconds n)
 
@@ -183,13 +184,13 @@ mkStats qs s =
 -------------------------------------------------------------------------------
 
 -- | Go over all pending stats buffers in redis.
-work :: R.Connection -> Int -> AggProcess -> IO ()
-work r n f = runRedis r $ do
+work :: R.Connection -> Int -> AggProcess -> ExpandDimensionsPolicy -> IO ()
+work r n f exp = runRedis r $ do
   dbg "entered work block"
   estimate <- fromRight 0 <$> scard packetsKey
   runConduit $
     CL.unfoldM nextKey estimate
-      .| CL.mapM_ (processSampler n f)
+      .| CL.mapM_ (processSampler n f exp)
   where
     nextKey estRemaining
       | estRemaining > 0 = do
@@ -206,9 +207,10 @@ processSampler ::
   -- | What to do with aggregation results
   AggProcess ->
   -- | Redis buffer for this metric
+  ExpandDimensionsPolicy ->
   B.ByteString ->
   Redis ()
-processSampler n (AggProcess cfg f) k = do
+processSampler n (AggProcess cfg f) exp k = do
   packets <- popLAll k
   case packets of
     [] -> return ()
@@ -232,13 +234,18 @@ processSampler n (AggProcess cfg f) k = do
                   . map (unCounter . spPayload)
                   $ xs
       t <- (fromIntegral . (* n) . (`div` n) . round) `fmap` liftIO TM.getTime
-      let aggs = map mkDimsAgg $ M.toList $ expandDims $ byDims
+      let aggs = map mkDimsAgg $ M.toList $ expandDims' $ byDims
           mkDimsAgg (dims, ps) = Aggregated t nm (mkAgg ps) dims
       mapM_ f aggs
   where
     quantilesFn = metricQuantiles cfg
+    expandDims' = case exp of
+      ExpandDimensions -> expandDims
+      DoNotExpandDimensions -> id
 
 -------------------------------------------------------------------------------
+
+data ExpandDimensionsPolicy = ExpandDimensions | DoNotExpandDimensions
 
 -- | Take a map of packets by dimensions and *add* aggregations of the
 -- existing dims that isolate each distinct dimension/dimensionvalue
